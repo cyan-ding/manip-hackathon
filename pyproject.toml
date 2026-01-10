@@ -10,17 +10,18 @@ dependencies = [
     "bitsandbytes==0.45.5",
     "datasets==3.6.0",
     "fire==0.7.0",
-    "openai==1.70.0",
-    "packaging==25.0",
+    "openai>=1.99.1",
     "pandas==2.3.1",
     "peft==0.15.1",
-    "pydantic==2.11.7",
+    "pydantic>=2.12.0",
     "PyYAML==6.0.2",
-    "setuptools==80.9.0",
-    "torch==2.6.0",
+    "torch>=2.9.0",
     "tqdm==4.67.1",
-    "transformers==4.52.3",
+    "transformers==4.57.2",
     "trl==0.15.2",
     "unsloth==2025.5.9",
-    "vllm==0.8.5.post1"
+    "vllm",
 ]
+
+[tool.uv.sources]
+vllm = { path = "EasySteer/vllm-steer" }
