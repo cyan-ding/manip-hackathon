@@ -5,9 +5,17 @@ import subprocess
 import json
 from pathlib import Path
 import glob
+import logging
 
 app = Flask(__name__)
 CORS(app)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Configuration
 BASE_DIR = Path(__file__).parent
@@ -25,12 +33,14 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
+    logger.info("Health check requested")
     return jsonify({"status": "ok", "service": "persona-vectors-api"})
 
 
 @app.route('/api/traits', methods=['GET'])
 def get_traits():
     """Get available traits"""
+    logger.info("Fetching available traits")
     try:
         extract_dir = TRAIT_DATA_DIR / "trait_data_extract"
         eval_dir = TRAIT_DATA_DIR / "trait_data_eval"
@@ -41,12 +51,14 @@ def get_traits():
         # Combine and deduplicate
         all_traits = sorted(set(extract_traits + eval_traits))
         
+        logger.info(f"Found {len(all_traits)} total traits")
         return jsonify({
             "traits": all_traits,
             "extract_traits": extract_traits,
             "eval_traits": eval_traits
         })
     except Exception as e:
+        logger.error(f"Error fetching traits: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -72,6 +84,7 @@ def evaluate_persona():
         }
     }
     """
+    logger.info("Evaluation requested")
     try:
         data = request.json
         model = data.get('model', 'Qwen/Qwen2.5-7B-Instruct')
@@ -80,7 +93,10 @@ def evaluate_persona():
         judge_model = data.get('judge_model', 'gpt-4.1-mini-2025-04-14')
         gpu = data.get('gpu', 0)
         
+        logger.info(f"Evaluation parameters - model: {model}, trait: {trait}, version: {version}, judge_model: {judge_model}, gpu: {gpu}")
+        
         if not trait:
+            logger.warning("Evaluation request missing trait parameter")
             return jsonify({"error": "trait is required"}), 400
         
         # Generate output filename
@@ -118,6 +134,8 @@ def evaluate_persona():
         env = os.environ.copy()
         env['CUDA_VISIBLE_DEVICES'] = str(gpu)
         
+        logger.info(f"Running evaluation command: {' '.join(cmd)}")
+        
         # Run evaluation
         result = subprocess.run(
             cmd,
@@ -128,12 +146,14 @@ def evaluate_persona():
         )
         
         if result.returncode != 0:
+            logger.error(f"Evaluation failed with return code {result.returncode}: {result.stderr}")
             return jsonify({
                 "error": "Evaluation failed",
                 "stderr": result.stderr,
                 "stdout": result.stdout
             }), 500
         
+        logger.info(f"Evaluation completed successfully, output saved to {output_path}")
         return jsonify({
             "status": "success",
             "output_file": str(output_path),
@@ -141,6 +161,7 @@ def evaluate_persona():
         })
         
     except Exception as e:
+        logger.error(f"Error during evaluation: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -158,6 +179,7 @@ def generate_vector():
         "save_dir": null  # optional, defaults to storage/vectors/model_name/
     }
     """
+    logger.info("Vector generation requested")
     try:
         data = request.json
         model_name = data.get('model_name')
@@ -165,7 +187,10 @@ def generate_vector():
         pos_path = data.get('pos_path')
         neg_path = data.get('neg_path')
         
+        logger.info(f"Vector generation parameters - model_name: {model_name}, trait: {trait}, pos_path: {pos_path}, neg_path: {neg_path}")
+        
         if not all([model_name, trait, pos_path, neg_path]):
+            logger.warning("Vector generation request missing required parameters")
             return jsonify({"error": "model_name, trait, pos_path, and neg_path are required"}), 400
         
         # Default save directory
@@ -184,6 +209,8 @@ def generate_vector():
             "--save_dir", str(save_dir)
         ]
         
+        logger.info(f"Running vector generation command: {' '.join(cmd)}")
+        
         # Run vector generation
         result = subprocess.run(
             cmd,
@@ -193,6 +220,7 @@ def generate_vector():
         )
         
         if result.returncode != 0:
+            logger.error(f"Vector generation failed with return code {result.returncode}: {result.stderr}")
             return jsonify({
                 "error": "Vector generation failed",
                 "stderr": result.stderr,
@@ -206,6 +234,7 @@ def generate_vector():
             f"{trait}_prompt_last_diff.pt"
         ]
         
+        logger.info(f"Vector generation completed successfully, saved to {save_dir}")
         return jsonify({
             "status": "success",
             "save_dir": str(save_dir),
@@ -214,6 +243,7 @@ def generate_vector():
         })
         
     except Exception as e:
+        logger.error(f"Error during vector generation: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -232,6 +262,7 @@ def calculate_projection():
         "gpu": 0
     }
     """
+    logger.info("Projection calculation requested")
     try:
         data = request.json
         file_path = data.get('file_path')
@@ -241,7 +272,10 @@ def calculate_projection():
         projection_type = data.get('projection_type', 'proj')
         gpu = data.get('gpu', 0)
         
+        logger.info(f"Projection calculation parameters - file_path: {file_path}, vector_path: {vector_path}, layer: {layer}, model_name: {model_name}, projection_type: {projection_type}, gpu: {gpu}")
+        
         if not all([file_path, vector_path]):
+            logger.warning("Projection calculation request missing required parameters")
             return jsonify({"error": "file_path and vector_path are required"}), 400
         
         # Build command
@@ -258,6 +292,8 @@ def calculate_projection():
         env = os.environ.copy()
         env['CUDA_VISIBLE_DEVICES'] = str(gpu)
         
+        logger.info(f"Running projection calculation command: {' '.join(cmd)}")
+        
         # Run projection calculation
         result = subprocess.run(
             cmd,
@@ -268,12 +304,14 @@ def calculate_projection():
         )
         
         if result.returncode != 0:
+            logger.error(f"Projection calculation failed with return code {result.returncode}: {result.stderr}")
             return jsonify({
                 "error": "Projection calculation failed",
                 "stderr": result.stderr,
                 "stdout": result.stdout
             }), 500
         
+        logger.info("Projection calculation completed successfully")
         return jsonify({
             "status": "success",
             "message": "Projection calculation completed successfully",
@@ -281,12 +319,14 @@ def calculate_projection():
         })
         
     except Exception as e:
+        logger.error(f"Error during projection calculation: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/results', methods=['GET'])
 def list_results():
     """List all available result files"""
+    logger.info("Listing result files")
     try:
         results_dir = STORAGE_DIR / "results"
         results = []
@@ -299,28 +339,35 @@ def list_results():
                     "size": file.stat().st_size
                 })
         
+        logger.info(f"Found {len(results)} result files")
         return jsonify({"results": results})
     except Exception as e:
+        logger.error(f"Error listing results: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/results/<filename>', methods=['GET'])
 def get_result(filename):
     """Download a specific result file"""
+    logger.info(f"Result file download requested: {filename}")
     try:
         file_path = STORAGE_DIR / "results" / filename
         
         if not file_path.exists():
+            logger.warning(f"Result file not found: {filename}")
             return jsonify({"error": "File not found"}), 404
         
+        logger.info(f"Sending result file: {filename}")
         return send_file(file_path, as_attachment=True)
     except Exception as e:
+        logger.error(f"Error retrieving result file {filename}: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/vectors', methods=['GET'])
 def list_vectors():
     """List all available vector files"""
+    logger.info("Listing vector files")
     try:
         vectors_dir = STORAGE_DIR / "vectors"
         vectors = []
@@ -334,10 +381,13 @@ def list_vectors():
                     "size": file.stat().st_size
                 })
         
+        logger.info(f"Found {len(vectors)} vector files")
         return jsonify({"vectors": vectors})
     except Exception as e:
+        logger.error(f"Error listing vectors: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
+    logger.info("Starting Flask application on 0.0.0.0:5000")
     app.run(debug=True, host='0.0.0.0', port=5000)
