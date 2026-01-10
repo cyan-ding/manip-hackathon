@@ -15,6 +15,7 @@ dependencies = [
     "peft==0.15.1",
     "pydantic>=2.12.0",
     "PyYAML==6.0.2",
+    "setuptools>=79.0.1",
     "torch>=2.9.0",
     "tqdm==4.67.1",
     "transformers==4.57.2",
@@ -25,3 +26,7 @@ dependencies = [
 
 [tool.uv.sources]
 vllm = { path = "EasySteer/vllm-steer" }
+
+[tool.uv.extra-build-variables]
+vllm = { VLLM_USE_PRECOMPILED = "1" }
+
