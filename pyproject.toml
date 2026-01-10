@@ -25,3 +25,6 @@ dependencies = [
 
 [tool.uv.sources]
 vllm = { path = "EasySteer/vllm-steer" }
+
+[tool.uv.extra-build-variables]
+vllm = { VLLM_USE_PRECOMPILED = "1" }
