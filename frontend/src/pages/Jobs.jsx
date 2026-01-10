@@ -44,6 +44,8 @@ function Jobs() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws/jobs/${selectedJob.id}`)
     
+    // ws.onopen = () => {ws.send("status")}
+
     ws.onmessage = (event) => {
       const jobData = JSON.parse(event.data)
       setSelectedJob(jobData)

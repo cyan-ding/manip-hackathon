@@ -112,8 +112,47 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+async def run_subprocess_streaming(cmd: List[str], cwd: Path, env: dict, job_id: str) -> int:
+    """Run a subprocess asynchronously with streaming output"""
+    job = jobs[job_id]
+    job.stdout = ""
+    job.stderr = ""
+    
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=cwd,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    async def read_stream(stream, is_stderr: bool):
+        """Read from a stream and update job output"""
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            decoded_line = line.decode()
+            if is_stderr:
+                job.stderr = (job.stderr or "") + decoded_line
+            else:
+                job.stdout = (job.stdout or "") + decoded_line
+            # Send update to connected websockets
+            await manager.send_job_update(job_id, job)
+    
+    # Read both streams concurrently
+    await asyncio.gather(
+        read_stream(process.stdout, is_stderr=False),
+        read_stream(process.stderr, is_stderr=True)
+    )
+    
+    # Wait for process to complete
+    await process.wait()
+    return process.returncode
+
+
 async def run_subprocess(cmd: List[str], cwd: Path, env: dict) -> tuple[int, str, str]:
-    """Run a subprocess asynchronously"""
+    """Run a subprocess asynchronously (non-streaming version for backwards compatibility)"""
     process = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
@@ -134,20 +173,17 @@ async def execute_job(job_id: str):
     
     try:
         if job.type == JobType.EVALUATE:
-            returncode, stdout, stderr = await run_evaluate_job(job.params)
+            returncode = await run_evaluate_job_streaming(job.params, job_id)
         elif job.type == JobType.GENERATE_VECTOR:
-            returncode, stdout, stderr = await run_generate_vector_job(job.params)
+            returncode = await run_generate_vector_job_streaming(job.params, job_id)
         elif job.type == JobType.PROJECTION:
-            returncode, stdout, stderr = await run_projection_job(job.params)
+            returncode = await run_projection_job_streaming(job.params, job_id)
         else:
             raise ValueError(f"Unknown job type: {job.type}")
         
-        job.stdout = stdout
-        job.stderr = stderr
-        
         if returncode != 0:
             job.status = JobStatus.FAILED
-            job.error = f"Process exited with code {returncode}: {stderr}"
+            job.error = f"Process exited with code {returncode}"
             logger.error(f"Job {job_id} failed: {job.error}")
         else:
             job.status = JobStatus.COMPLETED
@@ -187,6 +223,95 @@ def get_job_result(job: Job) -> Dict[str, Any]:
             "stdout": job.stdout
         }
     return {}
+
+
+async def run_evaluate_job_streaming(params: Dict[str, Any], job_id: str) -> int:
+    """Run evaluation job with streaming output"""
+    model = params.get('model', 'Qwen/Qwen2.5-7B-Instruct')
+    trait = params.get('trait')
+    version = params.get('version', 'eval')
+    judge_model = params.get('judge_model', 'gpt-4.1-mini')
+    gpu = params.get('gpu', 0)
+    output_path = params.get('output_path')
+    
+    cmd = [
+        "python", "-m", "eval.eval_persona",
+        "--model", model,
+        "--trait", trait,
+        "--output_path", output_path,
+        "--judge_model", judge_model,
+        "--version", version
+    ]
+    
+    if params.get('persona_instruction_type'):
+        cmd.extend(["--persona_instruction_type", params['persona_instruction_type']])
+    
+    if params.get('assistant_name'):
+        cmd.extend(["--assistant_name", params['assistant_name']])
+    
+    if not params.get('use_judge', False):
+        cmd.extend(["--use_judge", "False"])
+    
+    steering = params.get('steering')
+    if steering:
+        cmd.extend([
+            "--steering_type", steering.get('type', 'response'),
+            "--coef", str(steering.get('coef', 2.0)),
+            "--vector_path", steering.get('vector_path'),
+            "--layer", str(steering.get('layer', 20))
+        ])
+    
+    env = os.environ.copy()
+    env['CUDA_VISIBLE_DEVICES'] = str(gpu)
+    
+    logger.info(f"Running evaluation command: {' '.join(cmd)}")
+    return await run_subprocess_streaming(cmd, PERSONA_DIR, env, job_id)
+
+
+async def run_generate_vector_job_streaming(params: Dict[str, Any], job_id: str) -> int:
+    """Run vector generation job with streaming output"""
+    model_name = params.get('model_name')
+    trait = params.get('trait')
+    pos_path = params.get('pos_path')
+    neg_path = params.get('neg_path')
+    save_dir = params.get('save_dir')
+    
+    cmd = [
+        "python", "generate_vec.py",
+        "--model_name", model_name,
+        "--pos_path", pos_path,
+        "--neg_path", neg_path,
+        "--trait", trait,
+        "--save_dir", save_dir
+    ]
+    
+    logger.info(f"Running vector generation command: {' '.join(cmd)}")
+    return await run_subprocess_streaming(cmd, PERSONA_DIR, os.environ.copy(), job_id)
+
+
+async def run_projection_job_streaming(params: Dict[str, Any], job_id: str) -> int:
+    """Run projection calculation job with streaming output"""
+    file_path = params.get('file_path')
+    vector_path = params.get('vector_path')
+    layer = params.get('layer', 20)
+    model_name = params.get('model_name', 'Qwen/Qwen2.5-7B-Instruct')
+    projection_type = params.get('projection_type', 'proj')
+    gpu = params.get('gpu', 0)
+    
+    cmd = [
+        "python", "-m", "eval.cal_projection",
+        "--file_path", file_path,
+        "--vector_path", vector_path,
+        "--layer", str(layer),
+        "--model_name", model_name,
+        "--projection_type", projection_type
+    ]
+    
+    env = os.environ.copy()
+    env['CUDA_VISIBLE_DEVICES'] = str(gpu)
+    
+    logger.info(f"Running projection calculation command: {' '.join(cmd)}")
+    return await run_subprocess_streaming(cmd, PERSONA_DIR, env, job_id)
 
 
 async def run_evaluate_job(params: Dict[str, Any]) -> tuple[int, str, str]:
@@ -532,6 +657,7 @@ async def websocket_job_status(websocket: WebSocket, job_id: str):
     try:
         # Send current job status immediately
         await websocket.send_text(jobs[job_id].model_dump_json())
+        # await websocket.send_text("a")
         
         # Keep connection alive and handle any client messages
         while True:
