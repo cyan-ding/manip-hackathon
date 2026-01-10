@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 function Jobs() {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [selectedJob, setSelectedJob] = useState(null)
+  const wsRef = useRef(null)
 
   const fetchJobs = async () => {
     try {
@@ -28,6 +30,39 @@ function Jobs() {
     const interval = setInterval(fetchJobs, 5000)
     return () => clearInterval(interval)
   }, [])
+
+  // WebSocket connection for selected job
+  useEffect(() => {
+    if (!selectedJob) {
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+      return
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/jobs/${selectedJob.id}`)
+    
+    ws.onmessage = (event) => {
+      const jobData = JSON.parse(event.data)
+      setSelectedJob(jobData)
+      // Also update in the jobs list
+      setJobs(prev => prev.map(j => j.id === jobData.id ? jobData : j))
+    }
+    
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err)
+    }
+    
+    wsRef.current = ws
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
+    }
+  }, [selectedJob?.id])
 
   const getStatusBadge = (status) => {
     const colors = {
@@ -131,7 +166,12 @@ function Jobs() {
             </thead>
             <tbody>
               {jobs.map(job => (
-                <tr key={job.id}>
+                <tr 
+                  key={job.id} 
+                  onClick={() => setSelectedJob(job)}
+                  style={{ cursor: 'pointer' }}
+                  className="job-row"
+                >
                   <td>{getStatusBadge(job.status)}</td>
                   <td>{getTypeBadge(job.type)}</td>
                   <td>
@@ -182,6 +222,121 @@ function Jobs() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Job Detail Modal */}
+      {selectedJob && (
+        <div className="modal-overlay" onClick={() => setSelectedJob(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Job Details</h2>
+              <button className="modal-close" onClick={() => setSelectedJob(null)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                {getStatusBadge(selectedJob.status)}
+                {getTypeBadge(selectedJob.type)}
+                {(selectedJob.status === 'pending' || selectedJob.status === 'running') && (
+                  <div className="loading-spinner"></div>
+                )}
+              </div>
+
+              <div className="job-detail-section">
+                <h3>Job Information</h3>
+                <div className="job-detail-grid">
+                  <div><strong>ID:</strong></div>
+                  <div style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{selectedJob.id}</div>
+                  <div><strong>Created:</strong></div>
+                  <div>{formatDate(selectedJob.created_at)}</div>
+                  <div><strong>Started:</strong></div>
+                  <div>{formatDate(selectedJob.started_at)}</div>
+                  <div><strong>Completed:</strong></div>
+                  <div>{formatDate(selectedJob.completed_at)}</div>
+                  <div><strong>Duration:</strong></div>
+                  <div>{getDuration(selectedJob)}</div>
+                </div>
+              </div>
+
+              <div className="job-detail-section">
+                <h3>Parameters</h3>
+                <pre style={{ maxHeight: '200px', overflow: 'auto' }}>
+                  {JSON.stringify(selectedJob.params, null, 2)}
+                </pre>
+              </div>
+
+              {selectedJob.status === 'completed' && selectedJob.result && (
+                <div className="job-detail-section">
+                  <h3>Result</h3>
+                  <div className="alert alert-success">
+                    <p><strong>{selectedJob.result.message}</strong></p>
+                    {selectedJob.result.output_file && (
+                      <p style={{ marginTop: '0.5rem' }}>Output: {selectedJob.result.output_file}</p>
+                    )}
+                    {selectedJob.result.save_dir && (
+                      <p style={{ marginTop: '0.5rem' }}>Save directory: {selectedJob.result.save_dir}</p>
+                    )}
+                    {selectedJob.result.generated_files && (
+                      <div style={{ marginTop: '0.5rem' }}>
+                        <p>Generated files:</p>
+                        <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                          {selectedJob.result.generated_files.map(f => <li key={f}>{f}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                  {selectedJob.result.stdout && (
+                    <pre style={{ marginTop: '1rem', maxHeight: '200px', overflow: 'auto' }}>
+                      {selectedJob.result.stdout}
+                    </pre>
+                  )}
+                </div>
+              )}
+
+              {selectedJob.status === 'failed' && (
+                <div className="job-detail-section">
+                  <h3>Error</h3>
+                  <div className="alert alert-error">
+                    {selectedJob.error}
+                  </div>
+                </div>
+              )}
+
+              {selectedJob.stdout && (
+                <div className="job-detail-section">
+                  <h3>Standard Output</h3>
+                  <pre style={{ maxHeight: '300px', overflow: 'auto' }}>
+                    {selectedJob.stdout}
+                  </pre>
+                </div>
+              )}
+
+              {selectedJob.stderr && (
+                <div className="job-detail-section">
+                  <h3>Standard Error</h3>
+                  <pre style={{ maxHeight: '200px', overflow: 'auto', background: '#fff5f5' }}>
+                    {selectedJob.stderr}
+                  </pre>
+                </div>
+              )}
+
+              {(selectedJob.status === 'pending' || selectedJob.status === 'running') && (
+                <div className="job-detail-section">
+                  <div className="alert alert-info">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <div className="loading-spinner"></div>
+                      <span>
+                        {selectedJob.status === 'pending' ? 'Waiting to start...' : 'Job is running...'}
+                      </span>
+                    </div>
+                    <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
+                      This view will update automatically via WebSocket.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

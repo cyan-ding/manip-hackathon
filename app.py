@@ -519,8 +519,6 @@ async def websocket_job_status(websocket: WebSocket, job_id: str):
     - "status" to request current job status
     - "ping" to receive "pong" response (keep-alive)
     """
-    await websocket.accept()
-
     if job_id not in jobs:
         await websocket.close(code=4004, reason="Job not found")
         return

@@ -61,7 +61,7 @@ Evaluate a model with or without persona steering.
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "trait": "evil",
   "version": "eval",
-  "judge_model": "gpt-4.1-mini-2025-04-14",
+  "judge_model": "gpt-4.1-mini",
   "gpu": 0,
   "persona_instruction_type": null,
   "assistant_name": null,
