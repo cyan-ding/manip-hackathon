@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 function Evaluate() {
   const [formData, setFormData] = useState({
-    model: 'Qwen/Qwen2.5-7B-Instruct',
+    model: 'Qwen/Qwen3-4B-Instruct-2507',
     trait: '',
     version: 'eval',
-    judge_model: 'gpt-4.1-mini-2025-04-14',
+    judge_model: 'gpt-4.1-mini',
     gpu: 0,
     persona_instruction_type: '',
     assistant_name: '',
@@ -20,14 +20,56 @@ function Evaluate() {
   })
 
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState(null)
+  const [job, setJob] = useState(null)
   const [error, setError] = useState(null)
+  const wsRef = useRef(null)
+
+  // Cleanup WebSocket on unmount
+  useEffect(() => {
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
+    }
+  }, [])
+
+  const connectToJob = (jobId) => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/jobs/${jobId}`)
+    
+    ws.onmessage = (event) => {
+      const jobData = JSON.parse(event.data)
+      setJob(jobData)
+      
+      // Stop loading when job completes or fails
+      if (jobData.status === 'completed' || jobData.status === 'failed') {
+        setLoading(false)
+      }
+    }
+    
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err)
+      setError('WebSocket connection error')
+      setLoading(false)
+    }
+    
+    ws.onclose = () => {
+      console.log('WebSocket closed')
+    }
+    
+    wsRef.current = ws
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
-    setResult(null)
+    setJob(null)
     setError(null)
+
+    // Close existing WebSocket if any
+    if (wsRef.current) {
+      wsRef.current.close()
+    }
 
     const payload = {
       ...formData,
@@ -52,16 +94,38 @@ function Evaluate() {
       })
       const data = await res.json()
       
-      if (data.error) {
-        setError(data.error)
+      if (data.detail) {
+        setError(data.detail)
+        setLoading(false)
       } else {
-        setResult(data)
+        // Connect to WebSocket for job updates
+        connectToJob(data.job_id)
       }
     } catch (err) {
       setError(err.message)
-    } finally {
       setLoading(false)
     }
+  }
+
+  const getStatusBadge = (status) => {
+    const colors = {
+      pending: '#f39c12',
+      running: '#3498db',
+      completed: '#27ae60',
+      failed: '#e74c3c'
+    }
+    return (
+      <span style={{
+        backgroundColor: colors[status] || '#95a5a6',
+        color: 'white',
+        padding: '0.25rem 0.75rem',
+        borderRadius: '1rem',
+        fontSize: '0.875rem',
+        fontWeight: '500'
+      }}>
+        {status}
+      </span>
+    )
   }
 
   return (
@@ -78,7 +142,7 @@ function Evaluate() {
             type="text"
             value={formData.model}
             onChange={e => setFormData({...formData, model: e.target.value})}
-            placeholder="Qwen/Qwen2.5-7B-Instruct"
+            placeholder="Qwen/Qwen3-4B-Instruct-2507"
             required
           />
         </div>
@@ -208,7 +272,7 @@ function Evaluate() {
         </div>
 
         <button type="submit" className="btn btn-primary" disabled={loading}>
-          {loading ? 'Evaluating...' : 'Evaluate'}
+          {loading ? (job?.status === 'running' ? 'Running...' : 'Starting...') : 'Evaluate'}
         </button>
       </form>
 
@@ -218,10 +282,39 @@ function Evaluate() {
         </div>
       )}
 
-      {result && (
-        <div className="alert alert-success" style={{ marginTop: '1rem' }}>
-          <strong>{result.message}</strong>
-          <p style={{ marginTop: '0.5rem' }}>Output file: {result.output_file}</p>
+      {job && (
+        <div className={`alert ${job.status === 'completed' ? 'alert-success' : job.status === 'failed' ? 'alert-error' : 'alert-info'}`} style={{ marginTop: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem' }}>
+            <strong>Job Status:</strong> {getStatusBadge(job.status)}
+          </div>
+          <p style={{ fontSize: '0.875rem', color: '#7f8c8d' }}>Job ID: {job.id}</p>
+          
+          {job.status === 'completed' && job.result && (
+            <>
+              <p style={{ marginTop: '0.5rem' }}><strong>{job.result.message}</strong></p>
+              <p style={{ marginTop: '0.25rem' }}>Output file: {job.result.output_file}</p>
+            </>
+          )}
+          
+          {job.status === 'failed' && job.error && (
+            <div style={{ marginTop: '0.5rem' }}>
+              <p><strong>Error:</strong> {job.error}</p>
+              {job.stderr && (
+                <pre style={{ marginTop: '0.5rem', maxHeight: '200px', overflow: 'auto', fontSize: '0.75rem' }}>
+                  {job.stderr}
+                </pre>
+              )}
+            </div>
+          )}
+          
+          {(job.status === 'pending' || job.status === 'running') && (
+            <div style={{ marginTop: '0.5rem' }}>
+              <div className="loading-spinner"></div>
+              <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
+                {job.status === 'pending' ? 'Waiting to start...' : 'Evaluation in progress...'}
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>
