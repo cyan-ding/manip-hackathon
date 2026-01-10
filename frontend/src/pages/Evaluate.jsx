@@ -9,6 +9,7 @@ function Evaluate() {
     gpu: 0,
     persona_instruction_type: '',
     assistant_name: '',
+    use_judge: false,
   })
   
   const [enableSteering, setEnableSteering] = useState(false)
@@ -177,6 +178,19 @@ function Evaluate() {
             value={formData.judge_model}
             onChange={e => setFormData({...formData, judge_model: e.target.value})}
           />
+        </div>
+
+        <div className="checkbox-group" style={{ marginBottom: '1.5rem' }}>
+          <input
+            type="checkbox"
+            id="useJudge"
+            checked={formData.use_judge}
+            onChange={e => setFormData({...formData, use_judge: e.target.checked})}
+          />
+          <label htmlFor="useJudge">Use Judge Model for Evaluation</label>
+          <small style={{ display: 'block', marginTop: '0.25rem', color: '#7f8c8d' }}>
+            Enable to have the judge model score responses (slower but provides metrics)
+          </small>
         </div>
 
         <div className="form-group">

@@ -213,6 +213,9 @@ async def run_evaluate_job(params: Dict[str, Any]) -> tuple[int, str, str]:
     if params.get('assistant_name'):
         cmd.extend(["--assistant_name", params['assistant_name']])
     
+    if not params.get('use_judge', False):
+        cmd.extend(["--use_judge", "False"])
+    
     steering = params.get('steering')
     if steering:
         cmd.extend([
@@ -293,6 +296,7 @@ class EvaluateRequest(BaseModel):
     persona_instruction_type: Optional[str] = None
     assistant_name: Optional[str] = None
     steering: Optional[SteeringParams] = None
+    use_judge: bool = False
 
 
 class GenerateVectorRequest(BaseModel):
