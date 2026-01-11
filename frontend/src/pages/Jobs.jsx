@@ -214,7 +214,7 @@ function Jobs() {
                   <td style={{ fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
                     {getDuration(job)}
                     {(job.status === 'pending' || job.status === 'running') && (
-                      <span style={{ marginLeft: '0.5rem' }}>⏳</span>
+                      <span style={{ marginLeft: '0.5rem' }}>...</span>
                     )}
                   </td>
                 </tr>

@@ -510,6 +510,15 @@ class InferenceRequest(BaseModel):
     steering_type: str = "response"
 
 
+class DualInferenceRequest(BaseModel):
+    prompt: str
+    system_prompt: Optional[str] = None
+    gpu: int = 0
+    max_tokens: int = 1000
+    temperature: float = 0.7
+    top_p: float = 0.9
+
+
 class JobResponse(BaseModel):
     job_id: str
     status: JobStatus
@@ -660,21 +669,21 @@ async def eval_steering(request: EvalRequest):
 async def run_inference(request: InferenceRequest):
     """
     Start an inference job with optional steering
-    
+
     Returns a job_id that can be used to track progress via GET /api/jobs/{job_id}
     """
     logger.info("Inference requested")
-    
+
     if not request.prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
-    
+
     if request.coef != 0 and not request.vector_path:
         raise HTTPException(status_code=400, detail="vector_path is required when coef is not 0")
-    
+
     # Create job
     job_id = str(uuid.uuid4())
     params = request.model_dump()
-    
+
     job = Job(
         id=job_id,
         type=JobType.INFERENCE,
@@ -683,16 +692,84 @@ async def run_inference(request: InferenceRequest):
         params=params
     )
     jobs[job_id] = job
-    
+
     # Start job execution in background
     asyncio.create_task(execute_job(job_id))
-    
+
     logger.info(f"Created inference job {job_id}")
     return JobResponse(
         job_id=job_id,
         status=JobStatus.PENDING,
         message="Inference job created. Poll GET /api/jobs/{job_id} to track progress."
     )
+
+
+@app.post("/api/dual-inference")
+async def run_dual_inference(request: DualInferenceRequest):
+    """
+    Run inference on both baseline and training-time steered models
+
+    Returns two job_ids for tracking both jobs
+    """
+    logger.info("Dual inference requested")
+
+    if not request.prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    base_params = request.model_dump()
+
+    # Create baseline job
+    baseline_job_id = str(uuid.uuid4())
+    baseline_params = {
+        **base_params,
+        "model": "ckpt/Qwen2.5-7B-Instruct/hallucination-baseline",
+        "coef": 0,
+        "layer": 20,
+        "steering_type": "response"
+    }
+
+    baseline_job = Job(
+        id=baseline_job_id,
+        type=JobType.INFERENCE,
+        status=JobStatus.PENDING,
+        created_at=datetime.now(),
+        params=baseline_params
+    )
+    jobs[baseline_job_id] = baseline_job
+
+    # Create steered job
+    steered_job_id = str(uuid.uuid4())
+    steered_params = {
+        **base_params,
+        "model": "ckpt/Qwen2.5-7B-Instruct/hallucination-steered-layer20-coef5",
+        "coef": 0,
+        "layer": 20,
+        "steering_type": "response"
+    }
+
+    steered_job = Job(
+        id=steered_job_id,
+        type=JobType.INFERENCE,
+        status=JobStatus.PENDING,
+        created_at=datetime.now(),
+        params=steered_params
+    )
+    jobs[steered_job_id] = steered_job
+
+    # Run jobs sequentially to avoid memory issues
+    # Start baseline first, then steered after baseline completes
+    async def run_sequential_jobs():
+        await execute_job(baseline_job_id)  # Wait for baseline to complete
+        await execute_job(steered_job_id)    # Then run steered
+
+    asyncio.create_task(run_sequential_jobs())
+
+    logger.info(f"Created dual inference jobs (sequential): baseline={baseline_job_id}, steered={steered_job_id}")
+    return {
+        "baseline_job_id": baseline_job_id,
+        "steered_job_id": steered_job_id,
+        "message": "Dual inference jobs created (running sequentially). Poll GET /api/jobs/{job_id} to track progress."
+    }
 
 
 @app.post("/api/generate-vector", response_model=JobResponse)

@@ -149,7 +149,7 @@ function Playground() {
 
   return (
     <div className="card">
-      <h1>🎮 Inference Playground</h1>
+      <h1>Inference Playground</h1>
       <p style={{ marginBottom: '2rem', color: '#7f8c8d' }}>
         Test model inference with optional persona steering. Enter a prompt and see how the model responds
         with or without steering vectors applied.
@@ -252,7 +252,7 @@ function Playground() {
               checked={formData.enable_steering}
               onChange={e => setFormData({...formData, enable_steering: e.target.checked})}
             />
-            <label htmlFor="enableSteering" style={{ fontWeight: '500' }}>🎯 Enable Persona Steering</label>
+            <label htmlFor="enableSteering" style={{ fontWeight: '500' }}>Enable Persona Steering</label>
           </div>
 
           {formData.enable_steering && (
@@ -312,7 +312,7 @@ function Playground() {
         </div>
 
         <button type="submit" className="btn btn-primary" disabled={loading} style={{ marginTop: '1.5rem' }}>
-          {loading ? (job?.status === 'running' ? '🔄 Generating...' : '⏳ Starting...') : '🚀 Generate Response'}
+          {loading ? (job?.status === 'running' ? 'Generating...' : 'Starting...') : 'Generate Response'}
         </button>
       </form>
 
@@ -330,14 +330,14 @@ function Playground() {
           </div>
           
           {job.status === 'completed' && job.result && (
-            <div style={{ 
-              backgroundColor: '#f8f9fa', 
-              borderRadius: '0.5rem', 
+            <div style={{
+              backgroundColor: '#f8f9fa',
+              borderRadius: '0.5rem',
               padding: '1.5rem',
               border: '1px solid #e0e0e0'
             }}>
               <h3 style={{ marginTop: 0, marginBottom: '1rem', color: '#2c3e50' }}>
-                📝 Generated Response
+                Generated Response
               </h3>
               <div style={{
                 backgroundColor: 'white',
