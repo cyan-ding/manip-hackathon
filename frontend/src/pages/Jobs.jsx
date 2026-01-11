@@ -5,7 +5,7 @@ function Jobs() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [selectedJob, setSelectedJob] = useState(null)
-  const wsRef = useRef(null)
+  const pollingRef = useRef(null)
 
   const fetchJobs = async () => {
     try {
@@ -26,42 +26,39 @@ function Jobs() {
 
   useEffect(() => {
     fetchJobs()
-    // Poll for updates every 5 seconds
-    const interval = setInterval(fetchJobs, 5000)
+    // Poll for updates every 2 seconds
+    const interval = setInterval(fetchJobs, 2000)
     return () => clearInterval(interval)
   }, [])
 
-  // WebSocket connection for selected job
+  // Polling for selected job details
   useEffect(() => {
     if (!selectedJob) {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
       }
       return
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/jobs/${selectedJob.id}`)
-    
-    // ws.onopen = () => {ws.send("status")}
+    const pollJob = async () => {
+      try {
+        const res = await fetch(`/api/jobs/${selectedJob.id}`)
+        const jobData = await res.json()
+        setSelectedJob(jobData)
+        // Also update in the jobs list
+        setJobs(prev => prev.map(j => j.id === jobData.id ? jobData : j))
+      } catch (err) {
+        console.error('Polling error:', err)
+      }
+    }
 
-    ws.onmessage = (event) => {
-      const jobData = JSON.parse(event.data)
-      setSelectedJob(jobData)
-      // Also update in the jobs list
-      setJobs(prev => prev.map(j => j.id === jobData.id ? jobData : j))
-    }
-    
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err)
-    }
-    
-    wsRef.current = ws
+    // Poll every 1 second for the selected job
+    pollingRef.current = setInterval(pollJob, 1000)
 
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
       }
     }
   }, [selectedJob?.id])
@@ -332,7 +329,7 @@ function Jobs() {
                       </span>
                     </div>
                     <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
-                      This view will update automatically via WebSocket.
+                      This view will update automatically.
                     </p>
                   </div>
                 </div>

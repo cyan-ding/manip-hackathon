@@ -23,42 +23,45 @@ function Evaluate() {
   const [loading, setLoading] = useState(false)
   const [job, setJob] = useState(null)
   const [error, setError] = useState(null)
-  const wsRef = useRef(null)
+  const pollingRef = useRef(null)
 
-  // Cleanup WebSocket on unmount
+  // Cleanup polling on unmount
   useEffect(() => {
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
       }
     }
   }, [])
 
-  const connectToJob = (jobId) => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/jobs/${jobId}`)
-    
-    ws.onmessage = (event) => {
-      const jobData = JSON.parse(event.data)
-      setJob(jobData)
-      
-      // Stop loading when job completes or fails
-      if (jobData.status === 'completed' || jobData.status === 'failed') {
-        setLoading(false)
+  const startPolling = (jobId) => {
+    // Clear any existing polling
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+    }
+
+    const pollJob = async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`)
+        const jobData = await res.json()
+        setJob(jobData)
+        
+        // Stop polling when job completes or fails
+        if (jobData.status === 'completed' || jobData.status === 'failed') {
+          setLoading(false)
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current)
+            pollingRef.current = null
+          }
+        }
+      } catch (err) {
+        console.error('Polling error:', err)
       }
     }
-    
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err)
-      setError('WebSocket connection error')
-      setLoading(false)
-    }
-    
-    ws.onclose = () => {
-      console.log('WebSocket closed')
-    }
-    
-    wsRef.current = ws
+
+    // Poll immediately, then every 1 second
+    pollJob()
+    pollingRef.current = setInterval(pollJob, 1000)
   }
 
   const handleSubmit = async (e) => {
@@ -67,9 +70,9 @@ function Evaluate() {
     setJob(null)
     setError(null)
 
-    // Close existing WebSocket if any
-    if (wsRef.current) {
-      wsRef.current.close()
+    // Clear existing polling if any
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
     }
 
     const payload = {
@@ -99,8 +102,8 @@ function Evaluate() {
         setError(data.detail)
         setLoading(false)
       } else {
-        // Connect to WebSocket for job updates
-        connectToJob(data.job_id)
+        // Start polling for job updates
+        startPolling(data.job_id)
       }
     } catch (err) {
       setError(err.message)

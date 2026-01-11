@@ -13,41 +13,42 @@ function Projection() {
   const [loading, setLoading] = useState(false)
   const [job, setJob] = useState(null)
   const [error, setError] = useState(null)
-  const wsRef = useRef(null)
+  const pollingRef = useRef(null)
 
-  // Cleanup WebSocket on unmount
+  // Cleanup polling on unmount
   useEffect(() => {
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
       }
     }
   }, [])
 
-  const connectToJob = (jobId) => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/jobs/${jobId}`)
-    
-    ws.onmessage = (event) => {
-      const jobData = JSON.parse(event.data)
-      setJob(jobData)
-      
-      if (jobData.status === 'completed' || jobData.status === 'failed') {
-        setLoading(false)
+  const startPolling = (jobId) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+    }
+
+    const pollJob = async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`)
+        const jobData = await res.json()
+        setJob(jobData)
+        
+        if (jobData.status === 'completed' || jobData.status === 'failed') {
+          setLoading(false)
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current)
+            pollingRef.current = null
+          }
+        }
+      } catch (err) {
+        console.error('Polling error:', err)
       }
     }
-    
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err)
-      setError('WebSocket connection error')
-      setLoading(false)
-    }
-    
-    ws.onclose = () => {
-      console.log('WebSocket closed')
-    }
-    
-    wsRef.current = ws
+
+    pollJob()
+    pollingRef.current = setInterval(pollJob, 1000)
   }
 
   const handleSubmit = async (e) => {
@@ -56,8 +57,8 @@ function Projection() {
     setJob(null)
     setError(null)
 
-    if (wsRef.current) {
-      wsRef.current.close()
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
     }
 
     const payload = {
@@ -78,7 +79,7 @@ function Projection() {
         setError(data.detail)
         setLoading(false)
       } else {
-        connectToJob(data.job_id)
+        startPolling(data.job_id)
       }
     } catch (err) {
       setError(err.message)

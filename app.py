@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -75,43 +75,6 @@ class Job(BaseModel):
 jobs: Dict[str, Job] = {}
 
 
-# WebSocket connections for job updates
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}  # job_id -> list of websockets
-
-    async def connect(self, websocket: WebSocket, job_id: str):
-        await websocket.accept()
-        if job_id not in self.active_connections:
-            self.active_connections[job_id] = []
-        self.active_connections[job_id].append(websocket)
-        logger.info(f"WebSocket connected for job {job_id}")
-
-    def disconnect(self, websocket: WebSocket, job_id: str):
-        if job_id in self.active_connections:
-            if websocket in self.active_connections[job_id]:
-                self.active_connections[job_id].remove(websocket)
-            if not self.active_connections[job_id]:
-                del self.active_connections[job_id]
-        logger.info(f"WebSocket disconnected for job {job_id}")
-
-    async def send_job_update(self, job_id: str, job: Job):
-        if job_id in self.active_connections:
-            message = job.model_dump_json()
-            disconnected = []
-            for connection in self.active_connections[job_id]:
-                try:
-                    await connection.send_text(message)
-                except Exception:
-                    disconnected.append(connection)
-            # Clean up disconnected
-            for conn in disconnected:
-                self.disconnect(conn, job_id)
-
-
-manager = ConnectionManager()
-
-
 async def run_subprocess_streaming(cmd: List[str], cwd: Path, env: dict, job_id: str) -> int:
     """Run a subprocess asynchronously with streaming output"""
     job = jobs[job_id]
@@ -137,8 +100,6 @@ async def run_subprocess_streaming(cmd: List[str], cwd: Path, env: dict, job_id:
                 job.stderr = (job.stderr or "") + decoded_line
             else:
                 job.stdout = (job.stdout or "") + decoded_line
-            # Send update to connected websockets
-            await manager.send_job_update(job_id, job)
     
     # Read both streams concurrently
     await asyncio.gather(
@@ -169,7 +130,6 @@ async def execute_job(job_id: str):
     job = jobs[job_id]
     job.status = JobStatus.RUNNING
     job.started_at = datetime.now()
-    await manager.send_job_update(job_id, job)
     
     try:
         if job.type == JobType.EVALUATE:
@@ -196,7 +156,6 @@ async def execute_job(job_id: str):
         logger.error(f"Job {job_id} failed with exception: {e}", exc_info=True)
     
     job.completed_at = datetime.now()
-    await manager.send_job_update(job_id, job)
 
 
 def get_job_result(job: Job) -> Dict[str, Any]:
@@ -504,7 +463,7 @@ async def evaluate_persona(request: EvaluateRequest):
     """
     Start a persona evaluation job
     
-    Returns a job_id that can be used to track progress via WebSocket at /ws/jobs/{job_id}
+    Returns a job_id that can be used to track progress via GET /api/jobs/{job_id}
     """
     logger.info("Evaluation requested")
     
@@ -538,7 +497,7 @@ async def evaluate_persona(request: EvaluateRequest):
     return JobResponse(
         job_id=job_id,
         status=JobStatus.PENDING,
-        message="Evaluation job created. Connect to WebSocket /ws/jobs/{job_id} to track progress."
+        message="Evaluation job created. Poll GET /api/jobs/{job_id} to track progress."
     )
 
 
@@ -547,7 +506,7 @@ async def generate_vector(request: GenerateVectorRequest):
     """
     Start a vector generation job
     
-    Returns a job_id that can be used to track progress via WebSocket at /ws/jobs/{job_id}
+    Returns a job_id that can be used to track progress via GET /api/jobs/{job_id}
     """
     logger.info("Vector generation requested")
     
@@ -582,7 +541,7 @@ async def generate_vector(request: GenerateVectorRequest):
     return JobResponse(
         job_id=job_id,
         status=JobStatus.PENDING,
-        message="Vector generation job created. Connect to WebSocket /ws/jobs/{job_id} to track progress."
+        message="Vector generation job created. Poll GET /api/jobs/{job_id} to track progress."
     )
 
 
@@ -591,7 +550,7 @@ async def calculate_projection(request: ProjectionRequest):
     """
     Start a projection calculation job
     
-    Returns a job_id that can be used to track progress via WebSocket at /ws/jobs/{job_id}
+    Returns a job_id that can be used to track progress via GET /api/jobs/{job_id}
     """
     logger.info("Projection calculation requested")
     
@@ -618,7 +577,7 @@ async def calculate_projection(request: ProjectionRequest):
     return JobResponse(
         job_id=job_id,
         status=JobStatus.PENDING,
-        message="Projection calculation job created. Connect to WebSocket /ws/jobs/{job_id} to track progress."
+        message="Projection calculation job created. Poll GET /api/jobs/{job_id} to track progress."
     )
 
 
@@ -634,50 +593,6 @@ async def get_job(job_id: str):
 async def list_jobs():
     """List all jobs"""
     return {"jobs": list(jobs.values())}
-
-
-@app.websocket("/ws/jobs/{job_id}")
-async def websocket_job_status(websocket: WebSocket, job_id: str):
-    """
-    WebSocket endpoint for real-time job status updates
-    
-    Connect to this endpoint with a job_id to receive updates when the job status changes.
-    The server will send the full job object as JSON whenever the status updates.
-    
-    Client can send:
-    - "status" to request current job status
-    - "ping" to receive "pong" response (keep-alive)
-    """
-    if job_id not in jobs:
-        await websocket.close(code=4004, reason="Job not found")
-        return
-    
-    await manager.connect(websocket, job_id)
-    
-    try:
-        # Send current job status immediately
-        await websocket.send_text(jobs[job_id].model_dump_json())
-        # await websocket.send_text("a")
-        
-        # Keep connection alive and handle any client messages
-        while True:
-            try:
-                # Wait for any message from client (ping/pong or status request)
-                data = await websocket.receive_text()
-                
-                if data == "status":
-                    # Client requested current status
-                    await websocket.send_text(jobs[job_id].model_dump_json())
-                elif data == "ping":
-                    await websocket.send_text("pong")
-                    
-            except WebSocketDisconnect:
-                break
-                
-    except Exception as e:
-        logger.error(f"WebSocket error for job {job_id}: {e}")
-    finally:
-        manager.disconnect(websocket, job_id)
 
 
 @app.get("/api/results", response_model=Dict[str, List[ResultFile]])

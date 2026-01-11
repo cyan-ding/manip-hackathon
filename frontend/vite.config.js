@@ -14,11 +14,11 @@ export default defineConfig({
         target: 'http://localhost:5000',
         changeOrigin: true,
       },
-      '/ws': {
-        target: 'http://localhost:5000',
-        ws: true,
-        rewriteWsOrigin: true,
-      }
+      // '/ws/jobs/.*': {
+      //   target: 'ws://localhost:5000',
+      //   ws: true,
+      //   rewriteWsOrigin: true,
+      // }
     }
   }
 })

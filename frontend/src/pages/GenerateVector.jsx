@@ -12,41 +12,60 @@ function GenerateVector() {
   const [loading, setLoading] = useState(false)
   const [job, setJob] = useState(null)
   const [error, setError] = useState(null)
-  const wsRef = useRef(null)
+  const [availableResults, setAvailableResults] = useState([])
+  const [loadingResults, setLoadingResults] = useState(true)
+  const pollingRef = useRef(null)
 
-  // Cleanup WebSocket on unmount
+  // Fetch available results on mount
+  useEffect(() => {
+    const fetchResults = async () => {
+      try {
+        const res = await fetch('/api/results')
+        const data = await res.json()
+        setAvailableResults(data.results || [])
+      } catch (err) {
+        console.error('Failed to fetch results:', err)
+      } finally {
+        setLoadingResults(false)
+      }
+    }
+    fetchResults()
+  }, [])
+
+  // Cleanup polling on unmount
   useEffect(() => {
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
       }
     }
   }, [])
 
-  const connectToJob = (jobId) => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/jobs/${jobId}`)
-    
-    ws.onmessage = (event) => {
-      const jobData = JSON.parse(event.data)
-      setJob(jobData)
-      
-      if (jobData.status === 'completed' || jobData.status === 'failed') {
-        setLoading(false)
+  const startPolling = (jobId) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+    }
+
+    const pollJob = async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`)
+        const jobData = await res.json()
+        setJob(jobData)
+        
+        if (jobData.status === 'completed' || jobData.status === 'failed') {
+          setLoading(false)
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current)
+            pollingRef.current = null
+          }
+        }
+      } catch (err) {
+        console.error('Polling error:', err)
       }
     }
-    
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err)
-      setError('WebSocket connection error')
-      setLoading(false)
-    }
-    
-    ws.onclose = () => {
-      console.log('WebSocket closed')
-    }
-    
-    wsRef.current = ws
+
+    pollJob()
+    pollingRef.current = setInterval(pollJob, 1000)
   }
 
   const handleSubmit = async (e) => {
@@ -55,8 +74,8 @@ function GenerateVector() {
     setJob(null)
     setError(null)
 
-    if (wsRef.current) {
-      wsRef.current.close()
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
     }
 
     const payload = {
@@ -76,7 +95,7 @@ function GenerateVector() {
         setError(data.detail)
         setLoading(false)
       } else {
-        connectToJob(data.job_id)
+        startPolling(data.job_id)
       }
     } catch (err) {
       setError(err.message)
@@ -136,27 +155,39 @@ function GenerateVector() {
         </div>
 
         <div className="form-group">
-          <label>Positive Evaluation Path *</label>
-          <input
-            type="text"
+          <label>Positive Evaluation Result *</label>
+          <select
             value={formData.pos_path}
             onChange={e => setFormData({...formData, pos_path: e.target.value})}
-            placeholder="storage/results/model_trait_pos.csv"
             required
-          />
-          <small>Path to CSV file from positive persona evaluation</small>
+            disabled={loadingResults}
+          >
+            <option value="">{loadingResults ? 'Loading results...' : 'Select positive evaluation result'}</option>
+            {availableResults.map(result => (
+              <option key={result.path} value={result.path}>
+                {result.filename}
+              </option>
+            ))}
+          </select>
+          <small>Select CSV file from positive persona evaluation</small>
         </div>
 
         <div className="form-group">
-          <label>Negative Evaluation Path *</label>
-          <input
-            type="text"
+          <label>Negative Evaluation Result *</label>
+          <select
             value={formData.neg_path}
             onChange={e => setFormData({...formData, neg_path: e.target.value})}
-            placeholder="storage/results/model_trait_neg.csv"
             required
-          />
-          <small>Path to CSV file from negative persona evaluation</small>
+            disabled={loadingResults}
+          >
+            <option value="">{loadingResults ? 'Loading results...' : 'Select negative evaluation result'}</option>
+            {availableResults.map(result => (
+              <option key={result.path} value={result.path}>
+                {result.filename}
+              </option>
+            ))}
+          </select>
+          <small>Select CSV file from negative persona evaluation</small>
         </div>
 
         <div className="form-group">
