@@ -1,0 +1,1 @@
+only ever use uv for anything. DO NOT USE PIP
