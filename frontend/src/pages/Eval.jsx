@@ -1,29 +1,40 @@
 import { useState, useEffect, useRef } from 'react'
 
-function Evaluate() {
+function Eval() {
   const [formData, setFormData] = useState({
     model: 'Qwen/Qwen3-4B-Instruct-2507',
     trait: '',
-    version: 'eval',
     judge_model: 'gpt-4.1-mini',
     gpu: 0,
-    persona_instruction_type: '',
-    assistant_name: '',
     use_judge: false,
-  })
-  
-  const [enableSteering, setEnableSteering] = useState(false)
-  const [steering, setSteering] = useState({
-    type: 'response',
+    steering_type: 'response',
     coef: 2.0,
     vector_path: '',
-    layer: 20
+    layer: 20,
   })
 
   const [loading, setLoading] = useState(false)
   const [job, setJob] = useState(null)
   const [error, setError] = useState(null)
+  const [availableVectors, setAvailableVectors] = useState([])
+  const [loadingVectors, setLoadingVectors] = useState(true)
   const pollingRef = useRef(null)
+
+  // Fetch available vectors on mount
+  useEffect(() => {
+    const fetchVectors = async () => {
+      try {
+        const res = await fetch('/api/vectors')
+        const data = await res.json()
+        setAvailableVectors(data.vectors || [])
+      } catch (err) {
+        console.error('Failed to fetch vectors:', err)
+      } finally {
+        setLoadingVectors(false)
+      }
+    }
+    fetchVectors()
+  }, [])
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -35,7 +46,6 @@ function Evaluate() {
   }, [])
 
   const startPolling = (jobId) => {
-    // Clear any existing polling
     if (pollingRef.current) {
       clearInterval(pollingRef.current)
     }
@@ -46,7 +56,6 @@ function Evaluate() {
         const jobData = await res.json()
         setJob(jobData)
         
-        // Stop polling when job completes or fails
         if (jobData.status === 'completed' || jobData.status === 'failed') {
           setLoading(false)
           if (pollingRef.current) {
@@ -59,7 +68,6 @@ function Evaluate() {
       }
     }
 
-    // Poll immediately, then every 1 second
     pollJob()
     pollingRef.current = setInterval(pollJob, 1000)
   }
@@ -70,28 +78,24 @@ function Evaluate() {
     setJob(null)
     setError(null)
 
-    // Clear existing polling if any
     if (pollingRef.current) {
       clearInterval(pollingRef.current)
     }
 
     const payload = {
-      ...formData,
+      model: formData.model,
+      trait: formData.trait,
+      judge_model: formData.judge_model,
       gpu: parseInt(formData.gpu),
-      persona_instruction_type: formData.persona_instruction_type || null,
-      assistant_name: formData.assistant_name || null,
-    }
-
-    if (enableSteering && steering.vector_path) {
-      payload.steering = {
-        ...steering,
-        coef: parseFloat(steering.coef),
-        layer: parseInt(steering.layer)
-      }
+      use_judge: formData.use_judge,
+      steering_type: formData.steering_type,
+      coef: parseFloat(formData.coef),
+      vector_path: formData.vector_path,
+      layer: parseInt(formData.layer),
     }
 
     try {
-      const res = await fetch('/api/evaluate', {
+      const res = await fetch('/api/eval', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -102,7 +106,6 @@ function Evaluate() {
         setError(data.detail)
         setLoading(false)
       } else {
-        // Start polling for job updates
         startPolling(data.job_id)
       }
     } catch (err) {
@@ -134,9 +137,10 @@ function Evaluate() {
 
   return (
     <div className="card">
-      <h1>Evaluate Persona</h1>
+      <h1>Evaluate Steering</h1>
       <p style={{ marginBottom: '2rem', color: '#7f8c8d' }}>
-        Evaluate a model with or without persona steering
+        Evaluate a model with persona steering vectors applied.
+        Test how well your generated vectors influence model behavior.
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -164,22 +168,64 @@ function Evaluate() {
         </div>
 
         <div className="form-group">
-          <label>Version</label>
+          <label>Vector Path *</label>
           <select
-            value={formData.version}
-            onChange={e => setFormData({...formData, version: e.target.value})}
+            value={formData.vector_path}
+            onChange={e => setFormData({...formData, vector_path: e.target.value})}
+            required
+            disabled={loadingVectors}
           >
-            <option value="eval">eval</option>
-            <option value="extract">extract</option>
+            <option value="">{loadingVectors ? 'Loading vectors...' : 'Select a steering vector'}</option>
+            {availableVectors.map(vector => (
+              <option key={vector.full_path} value={vector.full_path}>
+                {vector.path}
+              </option>
+            ))}
           </select>
+          <small>Select the persona vector to apply for steering</small>
         </div>
 
         <div className="form-group">
-          <label>Judge Model</label>
+          <label>Steering Type</label>
+          <select
+            value={formData.steering_type}
+            onChange={e => setFormData({...formData, steering_type: e.target.value})}
+          >
+            <option value="response">Response</option>
+            <option value="prompt">Prompt</option>
+            <option value="all">All</option>
+          </select>
+          <small>When to apply the steering vector during generation</small>
+        </div>
+
+        <div className="form-group">
+          <label>Coefficient</label>
           <input
-            type="text"
-            value={formData.judge_model}
-            onChange={e => setFormData({...formData, judge_model: e.target.value})}
+            type="number"
+            step="0.1"
+            value={formData.coef}
+            onChange={e => setFormData({...formData, coef: e.target.value})}
+          />
+          <small>Steering strength multiplier (higher = stronger effect)</small>
+        </div>
+
+        <div className="form-group">
+          <label>Layer</label>
+          <input
+            type="number"
+            value={formData.layer}
+            onChange={e => setFormData({...formData, layer: e.target.value})}
+          />
+          <small>Transformer layer to apply steering (typically 15-25)</small>
+        </div>
+
+        <div className="form-group">
+          <label>GPU</label>
+          <input
+            type="number"
+            value={formData.gpu}
+            onChange={e => setFormData({...formData, gpu: e.target.value})}
+            min="0"
           />
         </div>
 
@@ -197,95 +243,13 @@ function Evaluate() {
         </div>
 
         <div className="form-group">
-          <label>GPU</label>
-          <input
-            type="number"
-            value={formData.gpu}
-            onChange={e => setFormData({...formData, gpu: e.target.value})}
-            min="0"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Persona Instruction Type</label>
-          <select
-            value={formData.persona_instruction_type}
-            onChange={e => setFormData({...formData, persona_instruction_type: e.target.value})}
-          >
-            <option value="">None</option>
-            <option value="pos">Positive</option>
-            <option value="neg">Negative</option>
-          </select>
-          <small>Leave empty for baseline evaluation</small>
-        </div>
-
-        <div className="form-group">
-          <label>Assistant Name</label>
+          <label>Judge Model</label>
           <input
             type="text"
-            value={formData.assistant_name}
-            onChange={e => setFormData({...formData, assistant_name: e.target.value})}
-            placeholder="evil or helpful"
+            value={formData.judge_model}
+            onChange={e => setFormData({...formData, judge_model: e.target.value})}
+            disabled={!formData.use_judge}
           />
-          <small>Use trait name for positive, "helpful" for negative</small>
-        </div>
-
-        <div className="steering-section">
-          <div className="checkbox-group">
-            <input
-              type="checkbox"
-              id="enableSteering"
-              checked={enableSteering}
-              onChange={e => setEnableSteering(e.target.checked)}
-            />
-            <label htmlFor="enableSteering">Enable Steering</label>
-          </div>
-
-          {enableSteering && (
-            <>
-              <div className="form-group" style={{ marginTop: '1rem' }}>
-                <label>Steering Type</label>
-                <select
-                  value={steering.type}
-                  onChange={e => setSteering({...steering, type: e.target.value})}
-                >
-                  <option value="response">Response</option>
-                  <option value="prompt">Prompt</option>
-                  <option value="all">All</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Coefficient</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={steering.coef}
-                  onChange={e => setSteering({...steering, coef: e.target.value})}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Vector Path *</label>
-                <input
-                  type="text"
-                  value={steering.vector_path}
-                  onChange={e => setSteering({...steering, vector_path: e.target.value})}
-                  placeholder="storage/vectors/model/trait_response_avg_diff.pt"
-                  required={enableSteering}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Layer</label>
-                <input
-                  type="number"
-                  value={steering.layer}
-                  onChange={e => setSteering({...steering, layer: e.target.value})}
-                />
-              </div>
-            </>
-          )}
         </div>
 
         <button type="submit" className="btn btn-primary" disabled={loading}>
@@ -328,7 +292,7 @@ function Evaluate() {
             <div style={{ marginTop: '0.5rem' }}>
               <div className="loading-spinner"></div>
               <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
-                {job.status === 'pending' ? 'Waiting to start...' : 'Evaluation in progress...'}
+                {job.status === 'pending' ? 'Waiting to start...' : 'Steering evaluation in progress...'}
               </p>
             </div>
           )}
@@ -338,4 +302,4 @@ function Evaluate() {
   )
 }
 
-export default Evaluate
+export default Eval

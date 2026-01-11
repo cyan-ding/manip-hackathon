@@ -52,9 +52,11 @@ class JobStatus(str, Enum):
 
 
 class JobType(str, Enum):
-    EVALUATE = "evaluate"
+    EXTRACT = "extract"
+    EVAL = "eval"
     GENERATE_VECTOR = "generate_vector"
     PROJECTION = "projection"
+    INFERENCE = "inference"
 
 
 class Job(BaseModel):
@@ -132,12 +134,16 @@ async def execute_job(job_id: str):
     job.started_at = datetime.now()
     
     try:
-        if job.type == JobType.EVALUATE:
-            returncode = await run_evaluate_job_streaming(job.params, job_id)
+        if job.type == JobType.EXTRACT:
+            returncode = await run_extract_job_streaming(job.params, job_id)
+        elif job.type == JobType.EVAL:
+            returncode = await run_eval_job_streaming(job.params, job_id)
         elif job.type == JobType.GENERATE_VECTOR:
             returncode = await run_generate_vector_job_streaming(job.params, job_id)
         elif job.type == JobType.PROJECTION:
             returncode = await run_projection_job_streaming(job.params, job_id)
+        elif job.type == JobType.INFERENCE:
+            returncode = await run_inference_job_streaming(job.params, job_id)
         else:
             raise ValueError(f"Unknown job type: {job.type}")
         
@@ -160,10 +166,15 @@ async def execute_job(job_id: str):
 
 def get_job_result(job: Job) -> Dict[str, Any]:
     """Get the result data based on job type"""
-    if job.type == JobType.EVALUATE:
+    if job.type == JobType.EXTRACT:
         return {
             "output_file": job.params.get("output_path"),
-            "message": "Evaluation completed successfully"
+            "message": "Extraction completed successfully"
+        }
+    elif job.type == JobType.EVAL:
+        return {
+            "output_file": job.params.get("output_path"),
+            "message": "Steering evaluation completed successfully"
         }
     elif job.type == JobType.GENERATE_VECTOR:
         trait = job.params.get("trait")
@@ -181,14 +192,30 @@ def get_job_result(job: Job) -> Dict[str, Any]:
             "message": "Projection calculation completed successfully",
             "stdout": job.stdout
         }
+    elif job.type == JobType.INFERENCE:
+        # Parse the JSON output from the inference script
+        import re
+        stdout = job.stdout or ""
+        try:
+            # Find the JSON after "=== INFERENCE RESULT ==="
+            match = re.search(r'=== INFERENCE RESULT ===\s*(.+)', stdout, re.DOTALL)
+            if match:
+                import json
+                result = json.loads(match.group(1).strip())
+                return result
+        except:
+            pass
+        return {
+            "message": "Inference completed",
+            "output": stdout
+        }
     return {}
 
 
-async def run_evaluate_job_streaming(params: Dict[str, Any], job_id: str) -> int:
-    """Run evaluation job with streaming output"""
+async def run_extract_job_streaming(params: Dict[str, Any], job_id: str) -> int:
+    """Run extraction job with streaming output"""
     model = params.get('model', 'Qwen/Qwen2.5-7B-Instruct')
     trait = params.get('trait')
-    version = params.get('version', 'eval')
     judge_model = params.get('judge_model', 'gpt-4.1-mini')
     gpu = params.get('gpu', 0)
     output_path = params.get('output_path')
@@ -199,7 +226,8 @@ async def run_evaluate_job_streaming(params: Dict[str, Any], job_id: str) -> int
         "--trait", trait,
         "--output_path", output_path,
         "--judge_model", judge_model,
-        "--version", version
+        "--version", "extract",
+        "--use_judge", "False"
     ]
     
     if params.get('persona_instruction_type'):
@@ -208,22 +236,46 @@ async def run_evaluate_job_streaming(params: Dict[str, Any], job_id: str) -> int
     if params.get('assistant_name'):
         cmd.extend(["--assistant_name", params['assistant_name']])
     
-    if not params.get('use_judge', False):
-        cmd.extend(["--use_judge", "False"])
+    env = os.environ.copy()
+    env['CUDA_VISIBLE_DEVICES'] = str(gpu)
     
-    steering = params.get('steering')
-    if steering:
-        cmd.extend([
-            "--steering_type", steering.get('type', 'response'),
-            "--coef", str(steering.get('coef', 2.0)),
-            "--vector_path", steering.get('vector_path'),
-            "--layer", str(steering.get('layer', 20))
-        ])
+    logger.info(f"Running extraction command: {' '.join(cmd)}")
+    return await run_subprocess_streaming(cmd, PERSONA_DIR, env, job_id)
+
+
+async def run_eval_job_streaming(params: Dict[str, Any], job_id: str) -> int:
+    """Run steering evaluation job with streaming output"""
+    model = params.get('model', 'Qwen/Qwen2.5-7B-Instruct')
+    trait = params.get('trait')
+    judge_model = params.get('judge_model', 'gpt-4.1-mini')
+    gpu = params.get('gpu', 0)
+    output_path = params.get('output_path')
+    use_judge = params.get('use_judge', False)
+    
+    # Steering params
+    steering_type = params.get('steering_type', 'response')
+    coef = params.get('coef', 2.0)
+    vector_path = params.get('vector_path')
+    layer = params.get('layer', 20)
+    
+    cmd = [
+        "python", "-m", "eval.eval_persona",
+        "--model", model,
+        "--trait", trait,
+        "--output_path", output_path,
+        "--judge_model", judge_model,
+        "--version", "eval",
+        "--steering_type", steering_type,
+        "--coef", str(coef),
+        "--vector_path", vector_path,
+        "--layer", str(layer),
+        "--use_judge", str(use_judge)
+    ]
     
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu)
     
-    logger.info(f"Running evaluation command: {' '.join(cmd)}")
+    logger.info(f"Running steering evaluation command: {' '.join(cmd)}")
     return await run_subprocess_streaming(cmd, PERSONA_DIR, env, job_id)
 
 
@@ -270,6 +322,47 @@ async def run_projection_job_streaming(params: Dict[str, Any], job_id: str) -> i
     env['CUDA_VISIBLE_DEVICES'] = str(gpu)
     
     logger.info(f"Running projection calculation command: {' '.join(cmd)}")
+    return await run_subprocess_streaming(cmd, PERSONA_DIR, env, job_id)
+
+
+async def run_inference_job_streaming(params: Dict[str, Any], job_id: str) -> int:
+    """Run inference job with streaming output"""
+    model = params.get('model', 'Qwen/Qwen2.5-7B-Instruct')
+    prompt = params.get('prompt')
+    system_prompt = params.get('system_prompt')
+    gpu = params.get('gpu', 0)
+    max_tokens = params.get('max_tokens', 1000)
+    temperature = params.get('temperature', 0.7)
+    top_p = params.get('top_p', 0.9)
+    
+    # Steering params
+    coef = params.get('coef', 0)
+    vector_path = params.get('vector_path')
+    layer = params.get('layer', 20)
+    steering_type = params.get('steering_type', 'response')
+    
+    cmd = [
+        "python", "inference.py",
+        "--model", model,
+        "--prompt", prompt,
+        "--max_tokens", str(max_tokens),
+        "--temperature", str(temperature),
+        "--top_p", str(top_p),
+        "--coef", str(coef),
+        "--layer", str(layer),
+        "--steering_type", steering_type,
+    ]
+    
+    if system_prompt:
+        cmd.extend(["--system_prompt", system_prompt])
+    
+    if vector_path and coef != 0:
+        cmd.extend(["--vector_path", vector_path])
+    
+    env = os.environ.copy()
+    env['CUDA_VISIBLE_DEVICES'] = str(gpu)
+    
+    logger.info(f"Running inference command: {' '.join(cmd)}")
     return await run_subprocess_streaming(cmd, PERSONA_DIR, env, job_id)
 
 
@@ -364,23 +457,25 @@ async def run_projection_job(params: Dict[str, Any]) -> tuple[int, str, str]:
 
 # ==================== Pydantic Models ====================
 
-class SteeringParams(BaseModel):
-    type: str = "response"
-    coef: float = 2.0
-    vector_path: str
-    layer: int = 20
-
-
-class EvaluateRequest(BaseModel):
+class ExtractRequest(BaseModel):
     model: str = "Qwen/Qwen2.5-7B-Instruct"
     trait: str
-    version: str = "eval"
     judge_model: str = "gpt-4.1-mini"
     gpu: int = 0
     persona_instruction_type: Optional[str] = None
     assistant_name: Optional[str] = None
-    steering: Optional[SteeringParams] = None
+
+
+class EvalRequest(BaseModel):
+    model: str = "Qwen/Qwen2.5-7B-Instruct"
+    trait: str
+    judge_model: str = "gpt-4.1-mini"
+    gpu: int = 0
     use_judge: bool = False
+    steering_type: str = "response"
+    coef: float = 2.0
+    vector_path: str
+    layer: int = 20
 
 
 class GenerateVectorRequest(BaseModel):
@@ -398,6 +493,21 @@ class ProjectionRequest(BaseModel):
     model_name: str = "Qwen/Qwen3-4B-Instruct-2507"
     projection_type: str = "proj"
     gpu: int = 0
+
+
+class InferenceRequest(BaseModel):
+    model: str = "Qwen/Qwen3-4B-Instruct-2507"
+    prompt: str
+    system_prompt: Optional[str] = None
+    gpu: int = 0
+    max_tokens: int = 1000
+    temperature: float = 0.7
+    top_p: float = 0.9
+    # Steering params (optional)
+    coef: float = 0  # 0 = no steering
+    vector_path: Optional[str] = None
+    layer: int = 20
+    steering_type: str = "response"
 
 
 class JobResponse(BaseModel):
@@ -458,32 +568,33 @@ async def get_traits():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/evaluate", response_model=JobResponse)
-async def evaluate_persona(request: EvaluateRequest):
+@app.post("/api/extract", response_model=JobResponse)
+async def extract_persona(request: ExtractRequest):
     """
-    Start a persona evaluation job
+    Start a persona extraction job
     
     Returns a job_id that can be used to track progress via GET /api/jobs/{job_id}
     """
-    logger.info("Evaluation requested")
+    logger.info("Extraction requested")
     
     if not request.trait:
         raise HTTPException(status_code=400, detail="trait is required")
     
+    if not request.persona_instruction_type:
+        raise HTTPException(status_code=400, detail="persona_instruction_type is required")
+    
     # Generate output filename
-    output_filename = f"{request.model.replace('/', '_')}_{request.trait}_{request.version}_{request.persona_instruction_type}.csv"
+    output_filename = f"{request.model.replace('/', '_')}_{request.trait}_extract_{request.persona_instruction_type}.csv"
     output_path = str(STORAGE_DIR / "results" / output_filename)
     
     # Create job
     job_id = str(uuid.uuid4())
     params = request.model_dump()
     params['output_path'] = output_path
-    if request.steering:
-        params['steering'] = request.steering.model_dump()
     
     job = Job(
         id=job_id,
-        type=JobType.EVALUATE,
+        type=JobType.EXTRACT,
         status=JobStatus.PENDING,
         created_at=datetime.now(),
         params=params
@@ -493,11 +604,94 @@ async def evaluate_persona(request: EvaluateRequest):
     # Start job execution in background
     asyncio.create_task(execute_job(job_id))
     
-    logger.info(f"Created evaluation job {job_id}")
+    logger.info(f"Created extraction job {job_id}")
     return JobResponse(
         job_id=job_id,
         status=JobStatus.PENDING,
-        message="Evaluation job created. Poll GET /api/jobs/{job_id} to track progress."
+        message="Extraction job created. Poll GET /api/jobs/{job_id} to track progress."
+    )
+
+
+@app.post("/api/eval", response_model=JobResponse)
+async def eval_steering(request: EvalRequest):
+    """
+    Start a steering evaluation job
+    
+    Returns a job_id that can be used to track progress via GET /api/jobs/{job_id}
+    """
+    logger.info("Steering evaluation requested")
+    
+    if not request.trait:
+        raise HTTPException(status_code=400, detail="trait is required")
+    
+    if not request.vector_path:
+        raise HTTPException(status_code=400, detail="vector_path is required")
+    
+    # Generate output filename based on steering params
+    output_filename = f"{request.model.replace('/', '_')}_{request.trait}_steer_{request.steering_type}_layer{request.layer}_coef{request.coef}.csv"
+    output_path = str(STORAGE_DIR / "results" / output_filename)
+    
+    # Create job
+    job_id = str(uuid.uuid4())
+    params = request.model_dump()
+    params['output_path'] = output_path
+    
+    job = Job(
+        id=job_id,
+        type=JobType.EVAL,
+        status=JobStatus.PENDING,
+        created_at=datetime.now(),
+        params=params
+    )
+    jobs[job_id] = job
+    
+    # Start job execution in background
+    asyncio.create_task(execute_job(job_id))
+    
+    logger.info(f"Created steering evaluation job {job_id}")
+    return JobResponse(
+        job_id=job_id,
+        status=JobStatus.PENDING,
+        message="Steering evaluation job created. Poll GET /api/jobs/{job_id} to track progress."
+    )
+
+
+@app.post("/api/inference", response_model=JobResponse)
+async def run_inference(request: InferenceRequest):
+    """
+    Start an inference job with optional steering
+    
+    Returns a job_id that can be used to track progress via GET /api/jobs/{job_id}
+    """
+    logger.info("Inference requested")
+    
+    if not request.prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    
+    if request.coef != 0 and not request.vector_path:
+        raise HTTPException(status_code=400, detail="vector_path is required when coef is not 0")
+    
+    # Create job
+    job_id = str(uuid.uuid4())
+    params = request.model_dump()
+    
+    job = Job(
+        id=job_id,
+        type=JobType.INFERENCE,
+        status=JobStatus.PENDING,
+        created_at=datetime.now(),
+        params=params
+    )
+    jobs[job_id] = job
+    
+    # Start job execution in background
+    asyncio.create_task(execute_job(job_id))
+    
+    logger.info(f"Created inference job {job_id}")
+    return JobResponse(
+        job_id=job_id,
+        status=JobStatus.PENDING,
+        message="Inference job created. Poll GET /api/jobs/{job_id} to track progress."
     )
 
 
