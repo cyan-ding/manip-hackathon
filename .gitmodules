@@ -3,3 +3,6 @@
 	url = https://github.com/safety-research/persona_vectors
 [submodule "persona-vectors"]
 	url = https://github.com/cyan-ding/persona_vectors.git
+[submodule "EasySteer"]
+	path = EasySteer
+	url = https://github.com/ZJU-REAL/EasySteer
